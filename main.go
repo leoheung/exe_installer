@@ -9,7 +9,7 @@ import (
 
 func main() {
 	err := installer.CreateInstaller(
-		"./stub.exe",
+		"./installer/stub/stub.exe",
 		"./yuumi.exe",
 		"./lol_yuumi_setup_v091.exe",
 		installer.Options{

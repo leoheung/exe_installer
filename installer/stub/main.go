@@ -13,6 +13,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/lxn/walk"
+	. "github.com/lxn/walk/declarative"
 )
 
 const (
@@ -48,105 +53,320 @@ type inMemoryFile struct {
 	Data []byte
 }
 
+// GUI相关变量
+var (
+	mainWindow     *walk.MainWindow
+	statusLabel    *walk.Label
+	progressBar    *walk.ProgressBar
+	installDirEdit *walk.LineEdit
+	archiveData    []byte
+	filesToInstall []*inMemoryFile
+	installMutex   sync.Mutex
+	installStatus  string
+)
+
 func main() {
 	if isUninstallMode() {
 		runUninstall()
 		return
 	}
 
-	fmt.Println("正在安装，请稍候...")
-
-	archive, err := extractSelf()
-	if err != nil {
-		fmt.Printf("无法提取内置归档: %v\n", err)
-		_ = pressAnyKey()
-		return
-	}
-
-	fmt.Println("正在解压归档...")
-	files, err := untarGzToMemory(archive)
-	if err != nil {
-		fmt.Printf("解包归档失败: %v\n", err)
-		_ = pressAnyKey()
-		return
-	}
-	fmt.Printf("解压完成，共 %d 个条目。\n", len(files))
-
-	// 解析 meta.json
-	if m := findFile(files, "meta.json"); m != nil {
-		_ = json.Unmarshal(m.Data, &meta) // 宽松处理
-	}
-	fmt.Printf("产品: %s  版本: %s\n", meta.ProductName, meta.Version)
-
-	installDir, err := decideInstallDir(meta.ProductName, meta.InstallDir)
-	if err != nil {
-		fmt.Printf("创建安装目录失败: %v\n", err)
-		_ = pressAnyKey()
-		return
-	}
-	fmt.Printf("目标安装目录: %s\n", installDir)
-
-	// 在写入之前清理旧内容（保留目录本身），避免残留旧版本文件
-	fmt.Println("清理旧版本文件（若存在）...")
-	if err := cleanInstallDir(installDir); err != nil {
-		fmt.Printf("清理已有目录失败: %v\n", err)
-		_ = pressAnyKey()
-		return
-	}
-	fmt.Println("目录清理完成，开始写入文件...")
-
-	if err := writeFilesWithLog(files, installDir); err != nil {
-		fmt.Printf("写文件失败: %v\n", err)
-		_ = pressAnyKey()
-		return
-	}
-	fmt.Println("文件写入完成。")
-
-	fmt.Printf("已安装到: %s\n", installDir)
-
-	// 确定实际 exe 路径
-	exePath := filepath.Join(installDir, meta.ExeName)
-	if _, err := os.Stat(exePath); err != nil {
-		fmt.Printf("未找到指定主程序 %s，尝试自动查找...\n", meta.ExeName)
-		if detected := detectAnyExe(installDir); detected != "" {
-			fmt.Printf("自动发现可执行文件: %s\n", detected)
-			exePath = detected
-		} else {
-			fmt.Println("未发现任何 .exe，跳过快捷方式创建。")
-			_ = pressAnyKey()
-			return
-		}
-	}
-
-	if runtime.GOOS == "windows" && (meta.CreateDesktopShortcut || meta.CreateStartMenuShortcut) {
-		fmt.Println("开始创建快捷方式...")
-		if err := createShortcuts(exePath, installDir, meta); err != nil {
-			fmt.Printf("创建快捷方式失败（忽略）：%v\n", err)
-		} else {
-			fmt.Println("快捷方式创建完成。")
-		}
-	}
-
-	// 生成卸载程序并写入注册表（仅 Windows 生效）
-	if runtime.GOOS == "windows" {
-		if err := createUninstaller(installDir); err != nil {
-			fmt.Printf("创建卸载程序失败（忽略）：%v\n", err)
-		}
-		if err := writeRegistry(meta, installDir, exePath); err != nil {
-			fmt.Printf("写入注册表失败（忽略）：%v\n", err)
-		} else {
-			fmt.Println("已写入注册表信息。")
-		}
-	}
-
-	fmt.Println("安装完成，祝您使用愉快！")
-	_ = pressAnyKey()
+	// 启动GUI
+	startGUI()
 }
 
-func pressAnyKey() error {
-	fmt.Print("按回车退出...")
-	_, err := fmt.Scanln()
-	return err
+// startGUI 启动图形用户界面
+func startGUI() {
+	var err error
+
+	// 创建主窗口
+	mainWindow, err = walk.NewMainWindow()
+	if err != nil {
+		fmt.Printf("无法创建窗口: %v\n", err)
+		return
+	}
+
+	// 提取自解压数据
+	go func() {
+		var err error
+		archiveData, err = extractSelf()
+		if err != nil {
+			updateStatus(fmt.Sprintf("无法提取内置归档: %v", err))
+			return
+		}
+
+		updateStatus("正在解压归档...")
+		filesToInstall, err = untarGzToMemory(archiveData)
+		if err != nil {
+			updateStatus(fmt.Sprintf("解包归档失败: %v", err))
+			return
+		}
+
+		// 解析 meta.json
+		if m := findFile(filesToInstall, "meta.json"); m != nil {
+			_ = json.Unmarshal(m.Data, &meta) // 宽松处理
+		}
+
+		// 设置默认安装目录
+		defaultInstallDir, _ := decideInstallDir(meta.ProductName, meta.InstallDir)
+		installMutex.Lock()
+		if installDirEdit != nil {
+			installDirEdit.SetText(defaultInstallDir)
+		}
+		installMutex.Unlock()
+
+		updateStatus(fmt.Sprintf("已加载产品: %s 版本: %s", meta.ProductName, meta.Version))
+	}()
+
+	// 创建安装目录选择按钮
+	var browseBtn *walk.PushButton
+
+	// 主窗口布局
+	MainWindow{
+		AssignTo: &mainWindow,
+		Title:    fmt.Sprintf("%s 安装程序", meta.ProductName),
+		Size:     Size{Width: 500, Height: 300},
+		Layout:   VBox{},
+		Children: []Widget{
+			Label{
+				Text: fmt.Sprintf("欢迎使用 %s 安装程序", meta.ProductName),
+				Font: Font{PointSize: 14, Bold: true},
+			},
+			Label{
+				AssignTo: &statusLabel,
+				Text:     "正在准备安装...",
+			},
+			GroupBox{
+				Title:  "安装选项",
+				Layout: HBox{},
+				Children: []Widget{
+					Label{
+						Text: "安装目录:",
+					},
+					LineEdit{
+						AssignTo:      &installDirEdit,
+						Text:          "",
+						StretchFactor: 1,
+					},
+					PushButton{
+						AssignTo: &browseBtn,
+						Text:     "浏览...",
+						OnClicked: func() {
+							browseForInstallDir()
+						},
+					},
+				},
+			},
+			CheckBox{
+				Text:    "创建桌面快捷方式",
+				Checked: meta.CreateDesktopShortcut,
+				OnClicked: func() {
+					meta.CreateDesktopShortcut = !meta.CreateDesktopShortcut
+				},
+			},
+			CheckBox{
+				Text:    "创建开始菜单快捷方式",
+				Checked: meta.CreateStartMenuShortcut,
+				OnClicked: func() {
+					meta.CreateStartMenuShortcut = !meta.CreateStartMenuShortcut
+				},
+			},
+			ProgressBar{
+				AssignTo:      &progressBar,
+				Visible:       false,
+				MarqueeMode:   true,
+				StretchFactor: 1,
+			},
+			Composite{
+				Layout: HBox{
+					MarginsZero: true,
+					SpacingZero: true,
+				},
+				Children: []Widget{
+					PushButton{
+						Text: "安装",
+						OnClicked: func() {
+							startInstall()
+						},
+						StretchFactor: 1,
+					},
+					PushButton{
+						Text: "退出",
+						OnClicked: func() {
+							mainWindow.Close()
+						},
+						StretchFactor: 1,
+					},
+				},
+			},
+		},
+	}.Run()
+}
+
+// browseForInstallDir 打开目录选择对话框
+func browseForInstallDir() {
+	defaultDir := installDirEdit.Text()
+	if defaultDir == "" {
+		defaultDir, _ = decideInstallDir(meta.ProductName, meta.InstallDir)
+	}
+
+	// 创建文件夹对话框
+	fd := new(walk.FileDialog)
+	fd.Title = "选择安装目录"
+	fd.FilePath = defaultDir
+
+	if ok, err := fd.ShowBrowseFolder(mainWindow); err != nil {
+		walk.MsgBox(mainWindow, "错误", fmt.Sprintf("目录选择对话框错误: %v", err), walk.MsgBoxIconError)
+		return
+	} else if ok {
+		installDirEdit.SetText(fd.FilePath)
+	}
+}
+
+// startInstall 开始安装过程
+func startInstall() {
+	installDir := installDirEdit.Text()
+	if installDir == "" {
+		walk.MsgBox(mainWindow, "错误", "请选择安装目录", walk.MsgBoxIconError)
+		return
+	}
+
+	if filesToInstall == nil {
+		walk.MsgBox(mainWindow, "错误", "安装文件尚未加载完成，请稍候", walk.MsgBoxIconError)
+		return
+	}
+
+	// 禁用界面元素
+	progressBar.SetVisible(true)
+	mainWindow.SetSuspended(true)
+
+	// 启动安装线程
+	go func() {
+		defer func() {
+			progressBar.SetVisible(false)
+			mainWindow.SetSuspended(false)
+		}()
+
+		updateStatus("正在清理安装目录...")
+		if err := cleanInstallDir(installDir); err != nil {
+			walk.MsgBox(mainWindow, "错误", fmt.Sprintf("清理目录失败: %v", err), walk.MsgBoxIconError)
+			return
+		}
+
+		updateStatus("正在写入文件...")
+		if err := writeFilesWithProgress(filesToInstall, installDir); err != nil {
+			walk.MsgBox(mainWindow, "错误", fmt.Sprintf("写文件失败: %v", err), walk.MsgBoxIconError)
+			return
+		}
+
+		// 确定实际 exe 路径
+		exePath := filepath.Join(installDir, meta.ExeName)
+		if _, err := os.Stat(exePath); err != nil {
+			updateStatus(fmt.Sprintf("未找到指定主程序 %s，尝试自动查找...", meta.ExeName))
+			if detected := detectAnyExe(installDir); detected != "" {
+				updateStatus(fmt.Sprintf("自动发现可执行文件: %s", detected))
+				exePath = detected
+			} else {
+				walk.MsgBox(mainWindow, "警告", "未发现任何 .exe，跳过快捷方式创建", walk.MsgBoxIconWarning)
+				finishInstallation(installDir, "")
+				return
+			}
+		}
+
+		if runtime.GOOS == "windows" && (meta.CreateDesktopShortcut || meta.CreateStartMenuShortcut) {
+			updateStatus("正在创建快捷方式...")
+			if err := createShortcuts(exePath, installDir, meta); err != nil {
+				walk.MsgBox(mainWindow, "警告", fmt.Sprintf("创建快捷方式失败（忽略）：%v", err), walk.MsgBoxIconWarning)
+			} else {
+				updateStatus("快捷方式创建完成")
+			}
+		}
+
+		// 生成卸载程序并写入注册表（仅 Windows 生效）
+		if runtime.GOOS == "windows" {
+			updateStatus("正在创建卸载程序...")
+			if err := createUninstaller(installDir); err != nil {
+				walk.MsgBox(mainWindow, "警告", fmt.Sprintf("创建卸载程序失败（忽略）：%v", err), walk.MsgBoxIconWarning)
+			}
+			if err := writeRegistry(meta, installDir, exePath); err != nil {
+				walk.MsgBox(mainWindow, "警告", fmt.Sprintf("写入注册表失败（忽略）：%v", err), walk.MsgBoxIconWarning)
+			} else {
+				updateStatus("已写入注册表信息")
+			}
+		}
+
+		finishInstallation(installDir, exePath)
+	}()
+}
+
+// finishInstallation 完成安装并显示完成对话框
+func finishInstallation(installDir, exePath string) {
+	result := walk.MsgBox(mainWindow, "安装完成", fmt.Sprintf("%s 已成功安装到 %s\n\n是否立即运行？", meta.ProductName, installDir), walk.MsgBoxIconInformation|walk.MsgBoxYesNo)
+
+	if result == walk.DlgCmdYes && exePath != "" {
+		// 运行安装的程序
+		_, err := os.StartProcess(exePath, []string{}, &os.ProcAttr{
+			Dir:   installDir,
+			Env:   os.Environ(),
+			Files: []*os.File{nil, nil, nil},
+		})
+		if err != nil {
+			walk.MsgBox(mainWindow, "错误", fmt.Sprintf("无法运行程序: %v", err), walk.MsgBoxIconError)
+		}
+	}
+
+	mainWindow.Close()
+}
+
+// updateStatus 更新状态标签文本
+func updateStatus(status string) {
+	installMutex.Lock()
+	installStatus = status
+	installMutex.Unlock()
+
+	// 在GUI线程中更新标签
+	if mainWindow != nil {
+		mainWindow.Synchronize(func() {
+			if statusLabel != nil {
+				statusLabel.SetText(status)
+			}
+		})
+	}
+}
+
+// writeFilesWithProgress 带进度的文件写入
+func writeFilesWithProgress(files []*inMemoryFile, base string) error {
+	for i, f := range files {
+		// 更新进度
+		updateStatus(fmt.Sprintf("正在写入文件 (%d/%d) - %s", i+1, len(files), f.Name))
+
+		if strings.HasSuffix(f.Name, "/") {
+			dir := filepath.Join(base, strings.TrimSuffix(f.Name, "/"))
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+
+		dest := filepath.Join(base, f.Name)
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+
+		mode := os.FileMode(f.Mode)
+		if mode == 0 {
+			mode = 0o644
+		}
+
+		if err := os.WriteFile(dest, f.Data, mode); err != nil {
+			return err
+		}
+
+		// 短暂延迟以确保GUI有机会更新
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	return nil
 }
 
 // ========== 归档解包到内存 ==========
@@ -426,4 +646,11 @@ func cleanInstallDir(dir string) error {
 		}
 	}
 	return nil
+}
+
+// pressAnyKey 等待用户按键（仅在命令行模式下使用）
+func pressAnyKey() error {
+	fmt.Print("按回车退出...")
+	_, err := fmt.Scanln()
+	return err
 }
