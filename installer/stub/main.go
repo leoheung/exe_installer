@@ -125,7 +125,7 @@ func startGUI() {
 		}
 		installMutex.Unlock()
 
-		updateStatus(fmt.Sprintf("已加载产品: %s 版本: %s", meta.ProductName, meta.Version))
+		updateStatus(fmt.Sprintf("版本: %s",  meta.Version))
 	}()
 
 	// 创建安装目录选择按钮
@@ -149,37 +149,42 @@ func startGUI() {
 			},
 			GroupBox{
 				Title:  "安装选项",
-				Layout: HBox{},
+				Layout: Grid{Columns: 1},
 				Children: []Widget{
-					Label{
-						Text: "安装目录:",
-					},
-					LineEdit{
-						AssignTo:      &installDirEdit,
-						Text:          "",
-						StretchFactor: 1,
-					},
-					PushButton{
-						AssignTo: &browseBtn,
-						Text:     "浏览...",
-						OnClicked: func() {
-							browseForInstallDir()
+					Composite{
+						Layout: HBox{},
+						Children: []Widget{
+							Label{
+								Text: "安装目录:",
+							},
+							LineEdit{
+								AssignTo:      &installDirEdit,
+								Text:          "",
+								StretchFactor: 1,
+							},
+							PushButton{
+								AssignTo: &browseBtn,
+								Text:     "浏览...",
+								OnClicked: func() {
+									browseForInstallDir()
+								},
+							},
 						},
 					},
-				},
-			},
-			CheckBox{
-				Text:    "创建桌面快捷方式",
-				Checked: meta.CreateDesktopShortcut,
-				OnClicked: func() {
-					meta.CreateDesktopShortcut = !meta.CreateDesktopShortcut
-				},
-			},
-			CheckBox{
-				Text:    "创建开始菜单快捷方式",
-				Checked: meta.CreateStartMenuShortcut,
-				OnClicked: func() {
-					meta.CreateStartMenuShortcut = !meta.CreateStartMenuShortcut
+					CheckBox{
+						Text:    "创建桌面快捷方式",
+						Checked: meta.CreateDesktopShortcut,
+						OnClicked: func() {
+							meta.CreateDesktopShortcut = !meta.CreateDesktopShortcut
+						},
+					},
+					CheckBox{
+						Text:    "创建开始菜单快捷方式",
+						Checked: meta.CreateStartMenuShortcut,
+						OnClicked: func() {
+							meta.CreateStartMenuShortcut = !meta.CreateStartMenuShortcut
+						},
+					},
 				},
 			},
 			ProgressBar{
