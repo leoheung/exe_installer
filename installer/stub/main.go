@@ -270,35 +270,72 @@ func extractSelf() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if info.Size() < trailerSize {
+
+	// 1. 定义搜索范围：例如搜索末尾的 64KB
+	// 如果文件被追加了签名，通常只有几 KB，64KB 足够覆盖
+	const searchLimit = 64 * 1024
+	fileSize := info.Size()
+	if fileSize < trailerSize {
 		return nil, fmt.Errorf("file too small")
 	}
-	if _, err := f.Seek(info.Size()-trailerSize, io.SeekStart); err != nil {
+
+	readSize := int64(searchLimit)
+	if readSize > fileSize {
+		readSize = fileSize
+	}
+
+	// 2. 读取末尾数据块
+	startOffset := fileSize - readSize
+	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
 		return nil, err
 	}
-	trailer := make([]byte, trailerSize)
-	if _, err := io.ReadFull(f, trailer); err != nil {
-		return nil, err
-	}
-	if string(trailer[8:]) != magicTrailer {
-		return nil, fmt.Errorf("magic mismatch")
-	}
-	archiveLen := binary.LittleEndian.Uint64(trailer[:8])
-	if archiveLen == 0 || archiveLen > uint64(info.Size()) {
-		return nil, fmt.Errorf("invalid archive len")
-	}
-	start := info.Size() - int64(trailerSize) - int64(archiveLen)
-	if start < 0 {
-		return nil, fmt.Errorf("invalid start")
-	}
-	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return nil, err
-	}
-	buf := make([]byte, archiveLen)
+
+	buf := make([]byte, readSize)
 	if _, err := io.ReadFull(f, buf); err != nil {
 		return nil, err
 	}
-	return buf, nil
+
+	// 3. 在缓冲区中倒序查找 Magic 字符串
+	magicBytes := []byte(magicTrailer)
+	idx := bytes.LastIndex(buf, magicBytes)
+	if idx == -1 {
+		return nil, fmt.Errorf("magic mismatch (signature not found in last %d bytes)", readSize)
+	}
+
+	// 4. 校验位置是否有足够的空间存放长度信息 (8 bytes)
+	// Magic 在 buf[idx] 开始，长度信息应该在 buf[idx-8]
+	if idx < 8 {
+		// 这种情况极少见（Magic 刚好被切断在读取边界），但在 64KB 窗口下几乎不可能发生
+		// 除非文件本身就极小且结构损坏
+		return nil, fmt.Errorf("magic found but header truncated")
+	}
+
+	// 5. 解析长度
+	lenStart := idx - 8
+	archiveLen := binary.LittleEndian.Uint64(buf[lenStart : lenStart+8])
+
+	// 6. 计算归档在文件中的绝对起始位置
+	// buf[lenStart] 在文件中的位置是 startOffset + lenStart
+	// 归档结束位置 = startOffset + lenStart
+	// 归档开始位置 = 归档结束位置 - archiveLen
+	archiveEndOffset := startOffset + int64(lenStart)
+	archiveStartOffset := archiveEndOffset - int64(archiveLen)
+
+	if archiveStartOffset < 0 {
+		return nil, fmt.Errorf("invalid archive start offset")
+	}
+
+	// 7. 读取归档数据
+	if _, err := f.Seek(archiveStartOffset, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	archiveBuf := make([]byte, archiveLen)
+	if _, err := io.ReadFull(f, archiveBuf); err != nil {
+		return nil, err
+	}
+
+	return archiveBuf, nil
 }
 
 func decideInstallDir(productName, forced string) (string, error) {
