@@ -1,3 +1,4 @@
+
 package main
 
 import (
@@ -56,6 +57,7 @@ type inMemoryFile struct {
 // GUI相关变量
 var (
 	mainWindow     *walk.MainWindow
+	welcomeLabel   *walk.Label
 	statusLabel    *walk.Label
 	progressBar    *walk.ProgressBar
 	installDirEdit *walk.LineEdit
@@ -107,6 +109,14 @@ func startGUI() {
 			_ = json.Unmarshal(m.Data, &meta) // 宽松处理
 		}
 
+		// 更新窗口标题和欢迎信息
+		mainWindow.Synchronize(func() {
+			mainWindow.SetTitle(fmt.Sprintf("%s 安装程序", meta.ProductName))
+			if welcomeLabel != nil {
+				welcomeLabel.SetText(fmt.Sprintf("欢迎使用 %s 安装程序", meta.ProductName))
+			}
+		})
+
 		// 设置默认安装目录
 		defaultInstallDir, _ := decideInstallDir(meta.ProductName, meta.InstallDir)
 		installMutex.Lock()
@@ -129,8 +139,9 @@ func startGUI() {
 		Layout:   VBox{},
 		Children: []Widget{
 			Label{
-				Text: fmt.Sprintf("欢迎使用 %s 安装程序", meta.ProductName),
-				Font: Font{PointSize: 14, Bold: true},
+				AssignTo: &welcomeLabel,
+				Text:     fmt.Sprintf("欢迎使用 %s 安装程序", meta.ProductName),
+				Font:     Font{PointSize: 14, Bold: true},
 			},
 			Label{
 				AssignTo: &statusLabel,
