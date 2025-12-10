@@ -3,9 +3,9 @@
 Write-Host "=== Compiling GUI Installer ==="
 Write-Host "Current directory: $(Get-Location)"
 
-# 1. Compile stub (with GUI)
+# 1. Compile stub (with GUI, no console window)
 Write-Host "Compiling stub.exe..."
-go build -o installer/stub/stub.exe ./installer/stub
+go build -ldflags="-H=windowsgui" -o installer/stub/stub.exe ./installer/stub
 if ($LASTEXITCODE -ne 0) {
     Write-Host "stub compilation failed!" -ForegroundColor Red
     exit 1
