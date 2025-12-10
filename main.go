@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"log"
 
 	"exe_installer/installer"
@@ -18,6 +19,7 @@ func main() {
 			CreateStartMenuShortcut: true,
 			Version:                 "0.9.1",
 			ShortcutName:            "悠米助手纯净版",
+			CompressionLevel:        gzip.BestCompression, // 使用最高压缩级别
 		},
 	)
 	if err != nil {

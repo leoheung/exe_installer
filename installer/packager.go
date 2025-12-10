@@ -23,6 +23,7 @@ type Options struct {
 	CreateStartMenuShortcut bool
 	Version                 string
 	ShortcutName            string // 新增：快捷方式显示名称（为空则使用 ProductName）
+	CompressionLevel        int    // 压缩等级，使用gzip包的常量（如gzip.BestCompression）
 }
 
 // CreateInstaller 将 payloadExe 打包并附加到 stubExe 生成 setup
@@ -61,7 +62,13 @@ func CreateInstaller(stubExe, payloadExe, outputSetup string, opts Options) erro
 		"meta.json":  metaBytes,
 	}
 
-	archive, err := buildTarGz(files)
+	// 设置默认压缩等级
+	compressionLevel := gzip.NoCompression
+	if opts.CompressionLevel == 9 {
+		compressionLevel = gzip.BestCompression
+	}
+	
+	archive, err := buildTarGz(files, compressionLevel)
 	if err != nil {
 		return fmt.Errorf("build archive: %w", err)
 	}
@@ -98,9 +105,9 @@ func CreateInstaller(stubExe, payloadExe, outputSetup string, opts Options) erro
 	return nil
 }
 
-func buildTarGz(files map[string][]byte) ([]byte, error) {
+func buildTarGz(files map[string][]byte, compressionLevel int) ([]byte, error) {
 	var buf bytes.Buffer
-	gzw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	gzw, err := gzip.NewWriterLevel(&buf, compressionLevel)
 	if err != nil {
 		return nil, err
 	}
