@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -56,15 +55,34 @@ type inMemoryFile struct {
 
 // GUI相关变量
 var (
-	mainWindow     *walk.MainWindow
+	mainWindow *walk.MainWindow
+
+	// 安装页面变量
 	welcomeLabel   *walk.Label
 	statusLabel    *walk.Label
-	progressBar    *walk.ProgressBar
 	installDirEdit *walk.LineEdit
+	installGroup   *walk.GroupBox
+	installButtons *walk.Composite
+
+	// 进度页面变量
+	progressLabel *walk.Label
+	progressBar   *walk.ProgressBar
+	progressGroup *walk.GroupBox
+
+	// 结果页面变量
+	resultLabel   *walk.Label
+	runAppButton  *walk.PushButton
+	exitAppButton *walk.PushButton
+	resultGroup   *walk.Composite
+
 	archiveData    []byte
 	filesToInstall []*inMemoryFile
 	installMutex   sync.Mutex
 	installStatus  string
+
+	// 安装结果
+	installedExePath string
+	installedDir     string
 )
 
 func main() {
@@ -81,10 +99,160 @@ func main() {
 func startGUI() {
 	var err error
 
-	// 创建主窗口
-	mainWindow, err = walk.NewMainWindow()
+	// 创建安装目录选择按钮
+	var browseBtn *walk.PushButton
+	var installBtn *walk.PushButton
+	var exitBtn *walk.PushButton
+
+	// 主窗口布局
+	MainWindow{
+		AssignTo: &mainWindow,
+		Title:    fmt.Sprintf("%s 安装程序", meta.ProductName),
+		Size:     Size{Width: 500, Height: 300},
+		Layout:   VBox{},
+		Children: []Widget{
+			// 安装页面控件
+			Label{
+				AssignTo: &welcomeLabel,
+				Text:     fmt.Sprintf("欢迎使用 %s 安装程序", meta.ProductName),
+				Font:     Font{PointSize: 14, Bold: true},
+			},
+			Label{
+				AssignTo: &statusLabel,
+				Text:     "正在准备安装...",
+			},
+			GroupBox{
+				AssignTo:      &installGroup,
+				Title:         "安装选项",
+				Layout:        Grid{Columns: 1},
+				StretchFactor: 1,
+				Children: []Widget{
+					Composite{
+						Layout: HBox{},
+						Children: []Widget{
+							Label{
+								Text: "安装目录:",
+							},
+							LineEdit{
+								AssignTo:      &installDirEdit,
+								Text:          "",
+								StretchFactor: 1,
+							},
+							PushButton{
+								AssignTo: &browseBtn,
+								Text:     "浏览...",
+								OnClicked: func() {
+									browseForInstallDir()
+								},
+							},
+						},
+					},
+					CheckBox{
+						Text:    "创建桌面快捷方式",
+						Checked: meta.CreateDesktopShortcut,
+						OnClicked: func() {
+							meta.CreateDesktopShortcut = !meta.CreateDesktopShortcut
+						},
+					},
+					CheckBox{
+						Text:    "创建开始菜单快捷方式",
+						Checked: meta.CreateStartMenuShortcut,
+						OnClicked: func() {
+							meta.CreateStartMenuShortcut = !meta.CreateStartMenuShortcut
+						},
+					},
+				},
+			},
+			// 进度页面控件
+			GroupBox{
+				AssignTo:      &progressGroup,
+				Title:         "安装进度",
+				Layout:        VBox{},
+				StretchFactor: 1,
+				Visible:       false,
+				Children: []Widget{
+					Label{
+						AssignTo: &progressLabel,
+						Text:     "正在安装...",
+						Font:     Font{PointSize: 12, Bold: true},
+					},
+					ProgressBar{
+						AssignTo:      &progressBar,
+						Value:         0,
+						MaxValue:      100,
+						StretchFactor: 1,
+					},
+				},
+			},
+			// 结果页面控件
+			Composite{
+				AssignTo:      &resultGroup,
+				Layout:        VBox{},
+				StretchFactor: 1,
+				Visible:       false,
+				Children: []Widget{
+					Label{
+						Text: "安装完成",
+						Font: Font{PointSize: 18, Bold: true},
+					},
+					Label{
+						AssignTo: &resultLabel,
+						Text:     "",
+					},
+					Composite{
+						Layout: HBox{},
+						Children: []Widget{
+							PushButton{
+								AssignTo: &runAppButton,
+								Text:     "立即运行",
+								OnClicked: func() {
+									runInstalledApplication()
+								},
+								StretchFactor: 1,
+							},
+							PushButton{
+								AssignTo: &exitAppButton,
+								Text:     "退出",
+								OnClicked: func() {
+									mainWindow.Close()
+								},
+								StretchFactor: 1,
+							},
+						},
+					},
+				},
+			},
+			// 底部按钮栏
+			Composite{
+				AssignTo: &installButtons,
+				Layout: HBox{
+					MarginsZero: true,
+					SpacingZero: true,
+				},
+				Children: []Widget{
+					PushButton{
+						AssignTo: &installBtn,
+						Text:     "安装",
+						OnClicked: func() {
+							startInstall()
+						},
+						StretchFactor: 1,
+					},
+					PushButton{
+						AssignTo: &exitBtn,
+						Text:     "退出",
+						OnClicked: func() {
+							mainWindow.Close()
+						},
+						StretchFactor: 1,
+					},
+				},
+			},
+		},
+	}.Create()
+
 	if err != nil {
-		fmt.Printf("无法创建窗口: %v\n", err)
+		fmt.Printf("窗口创建失败: %v\n", err)
 		return
 	}
 
@@ -125,98 +293,11 @@ func startGUI() {
 		}
 		installMutex.Unlock()
 
-		updateStatus(fmt.Sprintf("版本: %s",  meta.Version))
+		updateStatus(fmt.Sprintf("版本: %s", meta.Version))
 	}()
 
-	// 创建安装目录选择按钮
-	var browseBtn *walk.PushButton
-
-	// 主窗口布局
-	MainWindow{
-		AssignTo: &mainWindow,
-		Title:    fmt.Sprintf("%s 安装程序", meta.ProductName),
-		Size:     Size{Width: 500, Height: 300},
-		Layout:   VBox{},
-		Children: []Widget{
-			Label{
-				AssignTo: &welcomeLabel,
-				Text:     fmt.Sprintf("欢迎使用 %s 安装程序", meta.ProductName),
-				Font:     Font{PointSize: 14, Bold: true},
-			},
-			Label{
-				AssignTo: &statusLabel,
-				Text:     "正在准备安装...",
-			},
-			GroupBox{
-				Title:  "安装选项",
-				Layout: Grid{Columns: 1},
-				Children: []Widget{
-					Composite{
-						Layout: HBox{},
-						Children: []Widget{
-							Label{
-								Text: "安装目录:",
-							},
-							LineEdit{
-								AssignTo:      &installDirEdit,
-								Text:          "",
-								StretchFactor: 1,
-							},
-							PushButton{
-								AssignTo: &browseBtn,
-								Text:     "浏览...",
-								OnClicked: func() {
-									browseForInstallDir()
-								},
-							},
-						},
-					},
-					CheckBox{
-						Text:    "创建桌面快捷方式",
-						Checked: meta.CreateDesktopShortcut,
-						OnClicked: func() {
-							meta.CreateDesktopShortcut = !meta.CreateDesktopShortcut
-						},
-					},
-					CheckBox{
-						Text:    "创建开始菜单快捷方式",
-						Checked: meta.CreateStartMenuShortcut,
-						OnClicked: func() {
-							meta.CreateStartMenuShortcut = !meta.CreateStartMenuShortcut
-						},
-					},
-				},
-			},
-			ProgressBar{
-				AssignTo:      &progressBar,
-				Visible:       false,
-				MarqueeMode:   true,
-				StretchFactor: 1,
-			},
-			Composite{
-				Layout: HBox{
-					MarginsZero: true,
-					SpacingZero: true,
-				},
-				Children: []Widget{
-					PushButton{
-						Text: "安装",
-						OnClicked: func() {
-							startInstall()
-						},
-						StretchFactor: 1,
-					},
-					PushButton{
-						Text: "退出",
-						OnClicked: func() {
-							mainWindow.Close()
-						},
-						StretchFactor: 1,
-					},
-				},
-			},
-		},
-	}.Run()
+	// 显示主窗口
+	mainWindow.Run()
 }
 
 // browseForInstallDir 打开目录选择对话框
@@ -252,47 +333,82 @@ func startInstall() {
 		return
 	}
 
-	// 禁用界面元素
-	progressBar.SetVisible(true)
-	mainWindow.SetSuspended(true)
+	// 切换到进度页面
+	mainWindow.Synchronize(func() {
+		welcomeLabel.SetVisible(false)
+		statusLabel.SetVisible(false)
+		installGroup.SetVisible(false)
+		installButtons.SetVisible(false)
+		progressGroup.SetVisible(true)
+		resultGroup.SetVisible(false)
+	})
+
+	// 重置进度条
+	updateProgress(0)
 
 	// 启动安装线程
 	go func() {
+		var exePath string
+		var err error
+
 		defer func() {
-			progressBar.SetVisible(false)
-			mainWindow.SetSuspended(false)
+			if err != nil {
+				// 如果发生错误，切换回安装页面
+				mainWindow.Synchronize(func() {
+					welcomeLabel.SetVisible(true)
+					statusLabel.SetVisible(true)
+					installGroup.SetVisible(true)
+					installButtons.SetVisible(true)
+					progressGroup.SetVisible(false)
+					resultGroup.SetVisible(false)
+				})
+				walk.MsgBox(mainWindow, "错误", fmt.Sprintf("安装失败: %v", err), walk.MsgBoxIconError)
+				return
+			}
+
+			// 安装完成，切换到结果页面
+			mainWindow.Synchronize(func() {
+				progressGroup.SetVisible(false)
+				resultGroup.SetVisible(true)
+				installButtons.SetVisible(false)
+			})
+
+			// 保存安装结果
+			installedDir = installDir
+			installedExePath = exePath
+
+			// 更新结果页面信息
+			if resultLabel != nil {
+				resultLabel.SetText(fmt.Sprintf("%s 已成功安装到 %s", meta.ProductName, installDir))
+			}
 		}()
 
 		updateStatus("正在清理安装目录...")
 		if err := cleanInstallDir(installDir); err != nil {
-			walk.MsgBox(mainWindow, "错误", fmt.Sprintf("清理目录失败: %v", err), walk.MsgBoxIconError)
 			return
 		}
 
 		updateStatus("正在写入文件...")
 		if err := writeFilesWithProgress(filesToInstall, installDir); err != nil {
-			walk.MsgBox(mainWindow, "错误", fmt.Sprintf("写文件失败: %v", err), walk.MsgBoxIconError)
 			return
 		}
 
 		// 确定实际 exe 路径
-		exePath := filepath.Join(installDir, meta.ExeName)
+		exePath = filepath.Join(installDir, meta.ExeName)
 		if _, err := os.Stat(exePath); err != nil {
 			updateStatus(fmt.Sprintf("未找到指定主程序 %s，尝试自动查找...", meta.ExeName))
 			if detected := detectAnyExe(installDir); detected != "" {
 				updateStatus(fmt.Sprintf("自动发现可执行文件: %s", detected))
 				exePath = detected
 			} else {
-				walk.MsgBox(mainWindow, "警告", "未发现任何 .exe，跳过快捷方式创建", walk.MsgBoxIconWarning)
-				finishInstallation(installDir, "")
-				return
+				updateStatus("未发现任何 .exe，跳过快捷方式创建")
 			}
 		}
 
 		if runtime.GOOS == "windows" && (meta.CreateDesktopShortcut || meta.CreateStartMenuShortcut) {
 			updateStatus("正在创建快捷方式...")
 			if err := createShortcuts(exePath, installDir, meta); err != nil {
-				walk.MsgBox(mainWindow, "警告", fmt.Sprintf("创建快捷方式失败（忽略）：%v", err), walk.MsgBoxIconWarning)
+				updateStatus(fmt.Sprintf("创建快捷方式失败（忽略）：%v", err))
 			} else {
 				updateStatus("快捷方式创建完成")
 			}
@@ -302,35 +418,69 @@ func startInstall() {
 		if runtime.GOOS == "windows" {
 			updateStatus("正在创建卸载程序...")
 			if err := createUninstaller(installDir); err != nil {
-				walk.MsgBox(mainWindow, "警告", fmt.Sprintf("创建卸载程序失败（忽略）：%v", err), walk.MsgBoxIconWarning)
+				updateStatus(fmt.Sprintf("创建卸载程序失败（忽略）：%v", err))
 			}
 			if err := writeRegistry(meta, installDir, exePath); err != nil {
-				walk.MsgBox(mainWindow, "警告", fmt.Sprintf("写入注册表失败（忽略）：%v", err), walk.MsgBoxIconWarning)
+				updateStatus(fmt.Sprintf("写入注册表失败（忽略）：%v", err))
 			} else {
 				updateStatus("已写入注册表信息")
 			}
 		}
 
-		finishInstallation(installDir, exePath)
+		updateStatus("安装完成")
+		updateProgress(100)
 	}()
 }
 
-// finishInstallation 完成安装并显示完成对话框
-func finishInstallation(installDir, exePath string) {
-	result := walk.MsgBox(mainWindow, "安装完成", fmt.Sprintf("%s 已成功安装到 %s\n\n是否立即运行？", meta.ProductName, installDir), walk.MsgBoxIconInformation|walk.MsgBoxYesNo)
-
-	if result == walk.DlgCmdYes && exePath != "" {
-		// 运行安装的程序
-		_, err := os.StartProcess(exePath, []string{}, &os.ProcAttr{
-			Dir:   installDir,
-			Env:   os.Environ(),
-			Files: []*os.File{nil, nil, nil},
-		})
-		if err != nil {
-			walk.MsgBox(mainWindow, "错误", fmt.Sprintf("无法运行程序: %v", err), walk.MsgBoxIconError)
-		}
+// openInstallDirectory 打开安装目录
+func openInstallDirectory() {
+	if installedDir == "" {
+		return
 	}
 
+	// 在不同平台上打开目录
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = "explorer"
+		args = []string{installedDir}
+	case "darwin": // macOS
+		cmd = "open"
+		args = []string{installedDir}
+	default: // Linux
+		cmd = "xdg-open"
+		args = []string{installedDir}
+	}
+
+	_, err := os.StartProcess(cmd, args, &os.ProcAttr{
+		Env:   os.Environ(),
+		Files: []*os.File{nil, nil, nil},
+	})
+	if err != nil {
+		walk.MsgBox(mainWindow, "错误", fmt.Sprintf("无法打开目录: %v", err), walk.MsgBoxIconError)
+	}
+}
+
+// runInstalledApplication 运行已安装的应用程序
+func runInstalledApplication() {
+	if installedExePath == "" {
+		return
+	}
+
+	// 运行安装的程序
+	_, err := os.StartProcess(installedExePath, []string{}, &os.ProcAttr{
+		Dir:   installedDir,
+		Env:   os.Environ(),
+		Files: []*os.File{nil, nil, nil},
+	})
+	if err != nil {
+		walk.MsgBox(mainWindow, "错误", fmt.Sprintf("无法运行程序: %v", err), walk.MsgBoxIconError)
+		return
+	}
+
+	// 运行成功后关闭安装程序
 	mainWindow.Close()
 }
 
@@ -346,6 +496,21 @@ func updateStatus(status string) {
 			if statusLabel != nil {
 				statusLabel.SetText(status)
 			}
+			// 同时更新进度页面的标签
+			if progressLabel != nil {
+				progressLabel.SetText(status)
+			}
+		})
+	}
+}
+
+// updateProgress 更新进度条
+func updateProgress(value int) {
+	if mainWindow != nil {
+		mainWindow.Synchronize(func() {
+			if progressBar != nil {
+				progressBar.SetValue(value)
+			}
 		})
 	}
 }
@@ -354,7 +519,9 @@ func updateStatus(status string) {
 func writeFilesWithProgress(files []*inMemoryFile, base string) error {
 	for i, f := range files {
 		// 更新进度
+		progress := int(float64(i+1) / float64(len(files)) * 100)
 		updateStatus(fmt.Sprintf("正在写入文件 (%d/%d) - %s", i+1, len(files), f.Name))
+		updateProgress(progress)
 
 		if strings.HasSuffix(f.Name, "/") {
 			dir := filepath.Join(base, strings.TrimSuffix(f.Name, "/"))
