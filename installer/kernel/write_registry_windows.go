@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package kernel
 
 import (
 	"fmt"
@@ -11,12 +11,12 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// writeRegistry 写入安装与卸载信息到当前用户注册表。
+// WriteRegistry 写入安装与卸载信息到当前用户注册表。
 // Keys:
 //  1. HKCU\Software\<ProductName> : InstallDir, ExePath, Version
 //  2. HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\<ProductName>
 //     以便显示在“应用和功能”/“卸载程序”列表。
-func writeRegistry(meta InstallMeta, installDir, exePath string) error {
+func WriteRegistry(meta InstallMeta, installDir, exePath string) error {
 	if meta.ProductName == "" {
 		return fmt.Errorf("empty product name")
 	}
@@ -43,7 +43,7 @@ func writeRegistry(meta InstallMeta, installDir, exePath string) error {
 	uninstallExe := filepath.Join(installDir, "uninstall.exe")
 	if _, err := os.Stat(uninstallExe); err != nil {
 		// 如果尚未创建，尝试复制自身
-		_ = createUninstaller(installDir)
+		_ = CreateUninstaller(installDir)
 	}
 	uninstallString := fmt.Sprintf("\"%s\"", uninstallExe)
 	if err := setValues(registry.CURRENT_USER, uninstallPath, map[string]any{

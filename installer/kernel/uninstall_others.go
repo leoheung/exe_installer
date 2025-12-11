@@ -1,7 +1,7 @@
 //go:build !windows
 
-package main
+package kernel
 
 func isUninstallMode() bool              { return false }
-func createUninstaller(dir string) error { _ = dir; return nil }
+func CreateUninstaller(dir string) error { _ = dir; return nil }
 func runUninstall()                      {}

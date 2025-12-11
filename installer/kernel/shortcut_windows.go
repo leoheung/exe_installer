@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package kernel
 
 import (
 	"errors"
@@ -19,7 +19,7 @@ import (
 	"github.com/go-ole/go-ole/oleutil"
 )
 
-func createShortcuts(targetExe, workingDir string, meta InstallMeta) error {
+func CreateShortcuts(targetExe, workingDir string, meta InstallMeta) error {
 	if _, err := os.Stat(targetExe); err != nil {
 		return fmt.Errorf("target exe missing: %w", err)
 	}
