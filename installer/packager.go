@@ -24,17 +24,18 @@ type Options struct {
 	Version                 string
 	ShortcutName            string // 新增：快捷方式显示名称（为空则使用 ProductName）
 	CompressionLevel        int    // 压缩等级，使用gzip包的常量（如gzip.BestCompression）
+	DownloadURL             string // 下载URL，用于下载加安装模式
+	NumWorkers              int    // 并发下载线程数
 }
 
 // CreateInstaller 将 payloadExe 打包并附加到 stubExe 生成 setup
 func CreateInstaller(stubExe, payloadExe, outputSetup string, opts Options) error {
-	payloadData, err := os.ReadFile(payloadExe)
-	if err != nil {
-		return fmt.Errorf("read payload: %w", err)
-	}
-
 	if opts.ExeName == "" {
-		opts.ExeName = filepath.Base(payloadExe)
+		if payloadExe != "" {
+			opts.ExeName = filepath.Base(payloadExe)
+		} else {
+			opts.ExeName = "app.exe" // 默认文件名
+		}
 	}
 	if opts.ProductName == "" {
 		opts.ProductName = "MyApp"
@@ -53,21 +54,33 @@ func CreateInstaller(stubExe, payloadExe, outputSetup string, opts Options) erro
 		"version":                 opts.Version,
 		"shortcutName":            opts.ShortcutName,
 		"generatedAt":             time.Now().Format(time.RFC3339),
+		"downloadURL":             opts.DownloadURL,
+		"numWorkers":              opts.NumWorkers,
+	}
+
+	// 构建文件映射
+	files := map[string][]byte{
+		"meta.json": []byte{}, // 稍后填充
+	}
+
+	// 如果有本地payload文件，则添加到文件映射
+	if payloadExe != "" {
+		payloadData, err := os.ReadFile(payloadExe)
+		if err != nil {
+			return fmt.Errorf("read payload: %w", err)
+		}
+		files[opts.ExeName] = payloadData
 	}
 
 	metaBytes, _ := json.MarshalIndent(meta, "", "  ")
-
-	files := map[string][]byte{
-		opts.ExeName: payloadData,
-		"meta.json":  metaBytes,
-	}
+	files["meta.json"] = metaBytes
 
 	// 设置默认压缩等级
 	compressionLevel := gzip.NoCompression
 	if opts.CompressionLevel == 9 {
 		compressionLevel = gzip.BestCompression
 	}
-	
+
 	archive, err := buildTarGz(files, compressionLevel)
 	if err != nil {
 		return fmt.Errorf("build archive: %w", err)

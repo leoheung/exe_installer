@@ -19,20 +19,16 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# 3. Test packaging (if yuumi.exe exists)
-if (Test-Path "./yuumi.exe") {
-    Write-Host "Creating installer..."
-    ./main.exe
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Installer creation failed!" -ForegroundColor Red
-        exit 1
-    }
-    
-    Write-Host "Installer created successfully: lol_yuumi_setup_v091.exe" -ForegroundColor Green
-    Write-Host "You can run it to test the GUI interface."
-} else {
-    Write-Host "Note: yuumi.exe not found, skipping packaging test." -ForegroundColor Yellow
-    Write-Host "Please rename your executable file to yuumi.exe and run this script again."
+# 3. Test packaging (download mode)
+Write-Host "Creating installer..."
+./main.exe
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Installer creation failed!" -ForegroundColor Red
+    exit 1
 }
+
+Write-Host "Installer created successfully: lol_yuumi_setup_v091.exe" -ForegroundColor Green
+Write-Host "You can run it to test the GUI interface."
+Write-Host "Note: The installer will download yuumi.exe from the configured URL during installation." -ForegroundColor Cyan
 
 Write-Host "=== Test Completed ===" -ForegroundColor Green
